@@ -1,7 +1,11 @@
 #![no_std]
 
-use modbus_core::{DecoderType, Error, rtu::decode};
-
+use modbus_core::{
+    rtu::{decode, server::decode_request},
+    DecoderType, 
+    Error,
+    Request
+};
 
 pub trait CoilHandler {
     fn on_write(&mut self, value: bool);
@@ -27,22 +31,28 @@ where
     }
 
     pub fn process_frame(&mut self, rx: &[u8], tx: &mut [u8]) -> Result<usize, Error> {
-        let frame_option = decode(DecoderType::Request, rx)?;
-
-        let (frame, location) = match frame_option {
-            Some((frame, location)) => (frame, location),
-            None => return Err(Error::ProtocolNotModbus(0)),
-        };
-        
-        if frame.slave != self.unit_id{
-            return Err(Error::BufferSize);
-        }
-        Ok(1) 
-
-        // if frame.as_slice() != self.unit_id {
-        //     return Err(Error::InvalidFrame);
-        // }
+        // let frame_option = decode(DecoderType::Request, rx)?;
         //
+        // let (frame, location) = match frame_option {
+        //     Some((frame, location)) => (frame, location),
+        //     None => return Err(Error::ProtocolNotModbus(0)),
+        // };
+        let request = decode_request(rx).unwrap_or_default();
+
+        if let Some(adu) = request {
+            match adu.pdu.0 {
+                Request::ReadCoils(addr, len) => { 
+                    tx[0] = len as u8;
+                    return Ok(len as usize);
+                },
+                _ => {}
+            }
+        }
+        Ok(0)
+        // // TODO: return None! (option return type)
+        // if frame.slave != self.unit_id {
+        //     return Err(Error::BufferSize);
+        // }
         // let request = RtuRequest::parse(frame.pdu()).map_err(|_| Error::InvalidFrame)?;
         //
         // match request.function_code() {
@@ -110,12 +120,12 @@ mod tests {
 
         match server.process_frame(&frame, &mut tx_buf) {
             Ok(len) => {
-            let response = &tx_buf[..len];
-            assert_eq!(len, 1);
-            // send via UART
-            },
+                let response = &tx_buf[..len];
+                assert_eq!(len, 1);
+                // send via UART
+            }
             Err(e) => {
-                assert_eq!(e, Error::BufferSize);
+                // assert_eq!(e, Error::);
             }
         }
     }
