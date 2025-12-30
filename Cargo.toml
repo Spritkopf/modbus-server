@@ -1,0 +1,7 @@
+[package]
+name = "modbus-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+modbus-core = { version = "*", default-features = false, features = ["rtu"] }
