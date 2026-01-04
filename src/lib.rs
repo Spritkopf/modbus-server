@@ -9,7 +9,7 @@ use modbus_core::{
 
 
 pub trait CoilHandler {
-    fn on_write(&mut self, value: bool);
+    fn on_write(&mut self, addr: usize, len: usize, buf: &[bool]) -> Result<usize, Error>;
     fn on_read(&mut self, addr: usize, len: usize, buf: &mut [bool]) -> Result<usize, Error>;
 }
 
@@ -51,6 +51,21 @@ where
                     };
                     let tx_len = encode_response(response_adu, tx).ok().unwrap();
                     return Ok(tx_len as usize);
+                },
+                Request::WriteSingleCoil(addr, value) => {
+                    let coils_buf = [value];
+
+                    // call user handler for read_coils
+                    let handler_result = self.coil_handler.on_write(addr as usize, 1, &coils_buf)?;
+
+                    // workaround for bug in modbus-core crate: not encoding a response because the
+                    // Response::WriteSingleCoil enum is not correct. Since the modbus spec states the response is an 
+                    // echo of the request, we are just doing that
+                    tx[..rx.len()].copy_from_slice(rx);
+
+                    if handler_result == 1 {
+                        return Ok(rx.len());
+                    }
                 }
                 _ => {}
             }
@@ -62,20 +77,24 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    struct MyCoil;
+    struct MyCoil {
+        test_coils: [bool; 12]
+    }
 
     static TEST_COILS: [bool; 12] = [
         false, true, true, false, true, false, true, false, true, true, false, false,
     ];
 
     impl CoilHandler for MyCoil {
-        fn on_write(&mut self, value: bool) {
-            // toggle GPIO, drive relay, etc.
-            if value {
-                // set pin high
-            } else {
-                // set pin low
+        fn on_write(&mut self, addr: usize, len: usize, buf: &[bool]) -> Result<usize, Error>{
+            // The variant below iterates through the written coils, this way the application
+            // could write states to peripherals when the coils are not buffered in memory...
+            for (i, slot) in buf.iter().take(len).enumerate() {
+                let coil_idx = addr + i;
+                self.test_coils[coil_idx] = *slot;
             }
+
+            Ok(len)
         }
 
         fn on_read(&mut self, addr: usize, len: usize, buf: &mut [bool]) -> Result<usize, Error> {
@@ -88,12 +107,14 @@ mod tests {
             //     let coil_idx = addr + i;
             //     *slot = TEST_COILS[coil_idx];
             // }
+
             Ok(len)
         }
     }
     #[test]
     fn read_single_coil() {
-        let mut server = ModbusRtuServer::new(1, MyCoil);
+        let mycoil = MyCoil { test_coils: [false; 12] };
+        let mut server = ModbusRtuServer::new(1, mycoil);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -113,7 +134,8 @@ mod tests {
 
     #[test]
     fn read_multiple_coils() {
-        let mut server = ModbusRtuServer::new(1, MyCoil);
+        let mycoil = MyCoil { test_coils: [false; 12] };
+        let mut server = ModbusRtuServer::new(1, mycoil);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -122,12 +144,33 @@ mod tests {
             0x00, 0x04, // Quantity of coils: 4
             0xCD, 0xC9, // CRC16 (low byte first)
         ];
-        let expected_response: [u8; 6] = [0x01, 0x01, 0x01, 0x0A, 0xD1, 0x8F];
+        let expected_response: [u8; 6] = [0x01, 0x01, 0x01, 0x0A, 0xD1, 0x8F]; // Data byte: 0x0A (0:0 1:1 2:0 3:1)
         let mut tx_buf = [0u8; 32];
 
         let len = server.process_frame(&frame, &mut tx_buf).unwrap();
                 let response = &tx_buf[..len];
                 assert_eq!(len, 6);
                 assert_eq!(response, expected_response);
+    }
+
+    #[test]
+    fn write_single_coil() {
+        let mycoil = MyCoil { test_coils: [false; 12] };
+        let mut server = ModbusRtuServer::new(1, mycoil);
+
+        let frame: [u8; 8] = [
+            0x01, // Slave address
+            0x05, // Function code: Write single coil
+            0x00, 0x03, // Starting address: 3
+            0xFF, 0x00, // Coil Value: 0xFF (ON)
+            0x7C, 0x3A, // CRC16 (low byte first)
+        ];
+        let expected_response = frame; // repsponse is identical to request frame
+        let mut tx_buf = [0u8; 32];
+
+        let len = server.process_frame(&frame, &mut tx_buf).unwrap();
+                let response = &tx_buf[..len];
+                assert_eq!(response, expected_response);
+                assert_eq!(server.coil_handler.test_coils, [false, false, false, true, false, false, false, false, false, false, false, false])
     }
 }
