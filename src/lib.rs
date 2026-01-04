@@ -1,12 +1,13 @@
 #![no_std]
 
 use modbus_core::{
-    Coils, Error, Request, Response, ResponsePdu, rtu::{
-        Header, ResponseAdu, server::{decode_request, encode_response},
+    Coils, Error, Request, Response, ResponsePdu,
+    rtu::{
+        Header, ResponseAdu,
+        server::{decode_request, encode_response},
     },
 };
 // TODO: add library error type
-
 
 pub trait CoilHandler {
     fn on_write(&mut self, addr: usize, len: usize, buf: &[bool]) -> Result<usize, Error>;
@@ -39,7 +40,9 @@ where
                     let mut coils_buf = [false; 255];
 
                     // call user handler for read_coils
-                    let handler_result = self.coil_handler.on_read(addr as usize, len as usize, &mut coils_buf)?;
+                    let handler_result =
+                        self.coil_handler
+                            .on_read(addr as usize, len as usize, &mut coils_buf)?;
 
                     let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf)?;
                     let response = Response::ReadCoils(coils);
@@ -51,22 +54,46 @@ where
                     };
                     let tx_len = encode_response(response_adu, tx).ok().unwrap();
                     return Ok(tx_len as usize);
-                },
+                }
                 Request::WriteSingleCoil(addr, value) => {
                     let coils_buf = [value];
 
                     // call user handler for read_coils
-                    let handler_result = self.coil_handler.on_write(addr as usize, 1, &coils_buf)?;
+                    let num_written_coils =
+                        self.coil_handler.on_write(addr as usize, 1, &coils_buf)?;
 
                     // workaround for bug in modbus-core crate: not encoding a response because the
-                    // Response::WriteSingleCoil enum is not correct. Since the modbus spec states the response is an 
+                    // Response::WriteSingleCoil enum is not correct. Since the modbus spec states the response is an
                     // echo of the request, we are just doing that
                     tx[..rx.len()].copy_from_slice(rx);
 
-                    if handler_result == 1 {
+                    if num_written_coils == 1 {
                         return Ok(rx.len());
                     }
                 }
+                // TODO: modbus-core crate has a bug that breaks mnultiple coil write. PR is open, revisit
+                // later...
+                // Request::WriteMultipleCoils(addr, coils) => {
+                //     let mut coils_buf = [false; 32];
+                //     for (i, coil) in coils.into_iter().enumerate() {
+                //         coils_buf[i] = coil;
+                //     }
+                //
+                //     // call user handler for read_coils
+                //     let num_written_coils =
+                //         self.coil_handler
+                //             .on_write(addr as usize, coils.len(), &coils_buf)?;
+                //
+                //     let response = Response::WriteMultipleCoils(addr, num_written_coils as u16);
+                //     let response_adu = ResponseAdu {
+                //         hdr: Header {
+                //             slave: self.unit_id,
+                //         },
+                //         pdu: ResponsePdu(Ok(response)),
+                //     };
+                //     let tx_len = encode_response(response_adu, tx).ok().unwrap();
+                //     return Ok(tx_len as usize);
+                // }
                 _ => {}
             }
         }
@@ -78,7 +105,7 @@ where
 mod tests {
     use super::*;
     struct MyCoil {
-        test_coils: [bool; 12]
+        test_coils: [bool; 12],
     }
 
     static TEST_COILS: [bool; 12] = [
@@ -86,7 +113,7 @@ mod tests {
     ];
 
     impl CoilHandler for MyCoil {
-        fn on_write(&mut self, addr: usize, len: usize, buf: &[bool]) -> Result<usize, Error>{
+        fn on_write(&mut self, addr: usize, len: usize, buf: &[bool]) -> Result<usize, Error> {
             // The variant below iterates through the written coils, this way the application
             // could write states to peripherals when the coils are not buffered in memory...
             for (i, slot) in buf.iter().take(len).enumerate() {
@@ -113,7 +140,9 @@ mod tests {
     }
     #[test]
     fn read_single_coil() {
-        let mycoil = MyCoil { test_coils: [false; 12] };
+        let mycoil = MyCoil {
+            test_coils: [false; 12],
+        };
         let mut server = ModbusRtuServer::new(1, mycoil);
 
         let frame: [u8; 8] = [
@@ -127,14 +156,16 @@ mod tests {
         let mut tx_buf = [0u8; 32];
 
         let len = server.process_frame(&frame, &mut tx_buf).unwrap();
-                let response = &tx_buf[..len];
-                assert_eq!(len, 6);
-                assert_eq!(response, expected_response);
+        let response = &tx_buf[..len];
+        assert_eq!(len, 6);
+        assert_eq!(response, expected_response);
     }
 
     #[test]
     fn read_multiple_coils() {
-        let mycoil = MyCoil { test_coils: [false; 12] };
+        let mycoil = MyCoil {
+            test_coils: [false; 12],
+        };
         let mut server = ModbusRtuServer::new(1, mycoil);
 
         let frame: [u8; 8] = [
@@ -148,14 +179,16 @@ mod tests {
         let mut tx_buf = [0u8; 32];
 
         let len = server.process_frame(&frame, &mut tx_buf).unwrap();
-                let response = &tx_buf[..len];
-                assert_eq!(len, 6);
-                assert_eq!(response, expected_response);
+        let response = &tx_buf[..len];
+        assert_eq!(len, 6);
+        assert_eq!(response, expected_response);
     }
 
     #[test]
     fn write_single_coil() {
-        let mycoil = MyCoil { test_coils: [false; 12] };
+        let mycoil = MyCoil {
+            test_coils: [false; 12],
+        };
         let mut server = ModbusRtuServer::new(1, mycoil);
 
         let frame: [u8; 8] = [
@@ -169,8 +202,46 @@ mod tests {
         let mut tx_buf = [0u8; 32];
 
         let len = server.process_frame(&frame, &mut tx_buf).unwrap();
-                let response = &tx_buf[..len];
-                assert_eq!(response, expected_response);
-                assert_eq!(server.coil_handler.test_coils, [false, false, false, true, false, false, false, false, false, false, false, false])
+        let response = &tx_buf[..len];
+        assert_eq!(response, expected_response);
+        assert_eq!(
+            server.coil_handler.test_coils,
+            [
+                false, false, false, true, false, false, false, false, false, false, false, false
+            ]
+        )
     }
+
+    // TODO: modbus-core crate has a bug that breaks mnultiple coil write. PR is open, revisit
+    // later...
+    // #[test]
+    // fn write_multiple_coils() {
+    //     let mycoil = MyCoil {
+    //         test_coils: [false; 12],
+    //     };
+    //     let mut server = ModbusRtuServer::new(1, mycoil);
+    //
+    //     let frame: [u8; 10] = [
+    //         0x01, // Slave address
+    //         0x0F, // Function code: Write multiple coils
+    //         0x00, 0x03, // Starting address: 3
+    //         0x00, 0x04, // Coil count: 4
+    //         0x01, // Byte count: 1
+    //         0x0D, // Data byte: (3:1 4:0 5:1 6:1)
+    //         0xBB, 0x53, // CRC16 (low byte first)
+    //     ];
+    //     let expected_response: [u8; 8] = [0x01, 0x0F, 0x00, 0x03, 0x00, 0x04, 0xA4, 0x08];
+    //     let mut tx_buf = [0u8; 32];
+    //
+    //     let len = server.process_frame(&frame, &mut tx_buf).unwrap();
+    //     let response = &tx_buf[..len];
+    //     assert_eq!(len, 8);
+    //     assert_eq!(response, expected_response);
+    //     assert_eq!(
+    //         server.coil_handler.test_coils,
+    //         [
+    //             false, false, false, true, false, true, true, false, false, false, false, false
+    //         ]
+    //     )
+    // }
 }
