@@ -22,9 +22,19 @@ responsible to handle the serial communication part.
 
 ## Todo
 
-- [ ] Implement missing data types
+- [ ] Implement missing requests
+    - [X] Read Coils
+    - [X] Read Discrete inputs
+    - [X] Read Holding Registers
+    - [X] Read Input Registers
+    - [X] Write Single Coil
+    - [ ] Write Single Register
+    - [ ] Write Multiple Coils
+    - [ ] Write Multiple Registers
+
 - [ ] Crate Error type
 - [ ] Error handling
 - [ ] Cargo features
 - [ ] Documentation
 - [ ] Examples
+- [ ] Memory usage (internal buffers, maximum message size) (external buffers?)

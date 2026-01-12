@@ -11,6 +11,12 @@ use modbus_core::{
 
 pub trait ModbusHandler {
     fn read_coils(&mut self, addr: usize, len: usize, out: &mut [bool]) -> Result<usize, Error>;
+    fn read_discrete_input(
+        &mut self,
+        addr: usize,
+        len: usize,
+        out: &mut [bool],
+    ) -> Result<usize, Error>;
     fn read_holding_registers(
         &mut self,
         addr: usize,
@@ -55,6 +61,26 @@ where
 
                     let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf)?;
                     let response = Response::ReadCoils(coils);
+                    let response_adu = ResponseAdu {
+                        hdr: Header {
+                            slave: self.unit_id,
+                        },
+                        pdu: ResponsePdu(Ok(response)),
+                    };
+                    let tx_len = encode_response(response_adu, tx).ok().unwrap();
+                    return Ok(tx_len as usize);
+                }
+                Request::ReadDiscreteInputs(addr, len) => {
+                    let mut buf = [0u8; 255];
+                    let mut coils_buf = [false; 255];
+
+                    // call user handler for read_coils
+                    let _handler_result =
+                    self.handler
+                        .read_discrete_input(addr as usize, len as usize, &mut coils_buf)?;
+
+                    let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf)?;
+                    let response = Response::ReadDiscreteInputs(coils);
                     let response_adu = ResponseAdu {
                         hdr: Header {
                             slave: self.unit_id,
@@ -173,17 +199,6 @@ mod tests {
     ];
 
     impl ModbusHandler for TestData {
-        fn write_coils(&mut self, addr: usize, len: usize, buf: &[bool]) -> Result<usize, Error> {
-            // The variant below iterates through the written coils, this way the application
-            // could write states to peripherals when the coils are not buffered in memory...
-            for (i, slot) in buf.iter().take(len).enumerate() {
-                let coil_idx = addr + i;
-                self.test_coils[coil_idx] = *slot;
-            }
-
-            Ok(len)
-        }
-
         fn read_coils(
             &mut self,
             addr: usize,
@@ -199,6 +214,19 @@ mod tests {
             //     let coil_idx = addr + i;
             //     *slot = TEST_COILS[coil_idx];
             // }
+
+            Ok(len)
+        }
+
+        fn read_discrete_input(
+                &mut self,
+                addr: usize,
+                len: usize,
+                out: &mut [bool],
+            ) -> Result<usize, Error> {
+            
+            // manual memcopy since we have the coils states buffered in memory
+            out[..len].copy_from_slice(&TEST_COILS[addr..addr + len]);
 
             Ok(len)
         }
@@ -226,7 +254,20 @@ mod tests {
 
             Ok(len)
         }
+
+        fn write_coils(&mut self, addr: usize, len: usize, buf: &[bool]) -> Result<usize, Error> {
+            // The variant below iterates through the written coils, this way the application
+            // could write states to peripherals when the coils are not buffered in memory...
+            for (i, slot) in buf.iter().take(len).enumerate() {
+                let coil_idx = addr + i;
+                self.test_coils[coil_idx] = *slot;
+            }
+
+            Ok(len)
+        }
+
     }
+
     #[test]
     fn read_single_coil() {
         let mycoil = TestData {
@@ -247,7 +288,31 @@ mod tests {
 
         let len = server.process_frame(&frame, &mut tx_buf).unwrap();
         let response = &tx_buf[..len];
-        assert_eq!(len, 6);
+        assert_eq!(len, expected_response.len());
+        assert_eq!(response, expected_response);
+    }
+
+    #[test]
+    fn read_discrete_input() {
+        let mycoil = TestData {
+            test_coils: [false; 12],
+            test_registers: [0; 12],
+        };
+        let mut server = ModbusRtuServer::new(1, mycoil);
+
+        let frame: [u8; 8] = [
+            0x01, // Slave address
+            0x02, // Function code: Read Coils
+            0x00, 0x02, // Starting address: 2
+            0x00, 0x08, // Quantity of coils: 8
+            0xD8, 0x0C, // CRC16 (low byte first)
+        ];
+        let expected_response: [u8; 6] = [0x01, 0x02, 0x01, 0xD5, 0x60, 0x17];
+        let mut tx_buf = [0u8; 32];
+
+        let len = server.process_frame(&frame, &mut tx_buf).unwrap();
+        let response = &tx_buf[..len];
+        assert_eq!(len, expected_response.len());
         assert_eq!(response, expected_response);
     }
 
