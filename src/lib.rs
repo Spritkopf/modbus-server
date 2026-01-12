@@ -30,6 +30,7 @@ pub trait ModbusHandler {
         out: &mut [u16],
     ) -> Result<usize, Error>;
     fn write_coils(&mut self, addr: usize, len: usize, buf: &[bool]) -> Result<usize, Error>;
+    fn write_registers(&mut self, addr: usize, len: usize, buf: &[u16]) -> Result<usize, Error>;
 }
 
 pub struct ModbusRtuServer<H> {
@@ -75,9 +76,11 @@ where
                     let mut coils_buf = [false; 255];
 
                     // call user handler for read_coils
-                    let _handler_result =
-                    self.handler
-                        .read_discrete_input(addr as usize, len as usize, &mut coils_buf)?;
+                    let _handler_result = self.handler.read_discrete_input(
+                        addr as usize,
+                        len as usize,
+                        &mut coils_buf,
+                    )?;
 
                     let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf)?;
                     let response = Response::ReadDiscreteInputs(coils);
@@ -152,6 +155,23 @@ where
                         return Ok(rx.len());
                     }
                 }
+                Request::WriteSingleRegister(addr, value) => {
+                    let reg_buf = [value];
+
+                    // call user handler for read_coils
+                    let _num_written_regs =
+                        self.handler.write_registers(addr as usize, 1, &reg_buf)?;
+
+                    let response = Response::WriteSingleRegister(addr, value);
+                    let response_adu = ResponseAdu {
+                        hdr: Header {
+                            slave: self.unit_id,
+                        },
+                        pdu: ResponsePdu(Ok(response)),
+                    };
+                    let tx_len = encode_response(response_adu, tx).ok().unwrap();
+                    return Ok(tx_len as usize);
+                }
                 // TODO: modbus-core crate has a bug that breaks mnultiple coil write. PR is open, revisit
                 // later...
                 // Request::WriteMultipleCoils(addr, coils) => {
@@ -166,6 +186,26 @@ where
                 //             .on_write(addr as usize, coils.len(), &coils_buf)?;
                 //
                 //     let response = Response::WriteMultipleCoils(addr, num_written_coils as u16);
+                //     let response_adu = ResponseAdu {
+                //         hdr: Header {
+                //             slave: self.unit_id,
+                //         },
+                //         pdu: ResponsePdu(Ok(response)),
+                //     };
+                //     let tx_len = encode_response(response_adu, tx).ok().unwrap();
+                //     return Ok(tx_len as usize);
+                // }
+                // Request::WriteMultipleRegisters(addr, data) => {
+                //     let mut reg_buf = [0u16;32];
+                //
+                //     for (i, reg) in data.into_iter().enumerate() {
+                //         reg_buf[i] = reg;
+                //     }
+                //     // call user handler for read_coils
+                //     let num_written_regs =
+                //     self.handler.write_registers(addr as usize, data.len(), &reg_buf)?;
+                //
+                //     let response = Response::WriteMultipleRegisters(addr, num_written_regs as u16);
                 //     let response_adu = ResponseAdu {
                 //         hdr: Header {
                 //             slave: self.unit_id,
@@ -219,12 +259,11 @@ mod tests {
         }
 
         fn read_discrete_input(
-                &mut self,
-                addr: usize,
-                len: usize,
-                out: &mut [bool],
-            ) -> Result<usize, Error> {
-            
+            &mut self,
+            addr: usize,
+            len: usize,
+            out: &mut [bool],
+        ) -> Result<usize, Error> {
             // manual memcopy since we have the coils states buffered in memory
             out[..len].copy_from_slice(&TEST_COILS[addr..addr + len]);
 
@@ -266,6 +305,16 @@ mod tests {
             Ok(len)
         }
 
+        fn write_registers(&mut self, addr: usize, len: usize, buf: &[u16]) -> Result<usize, Error> {
+            // The variant below iterates through the written regs, this way the application
+            // could write states to peripherals when the registers are not buffered in memory...
+            for (i, slot) in buf.iter().take(len).enumerate() {
+                let reg_idx = addr + i;
+                self.test_registers[reg_idx] = *slot;
+            }
+
+            Ok(len)
+        }
     }
 
     #[test]
@@ -430,6 +479,34 @@ mod tests {
         )
     }
 
+    #[test]
+    fn write_single_register() {
+        let mycoil = TestData {
+            test_coils: [false; 12],
+            test_registers: [0; 12],
+        };
+        let mut server = ModbusRtuServer::new(1, mycoil);
+
+        let frame: [u8; 8] = [
+            0x01, // Slave address
+            0x06, // Function code: Write single register
+            0x00, 0x08, // Starting address: 3
+            0x12, 0x34, // Register Value: 0x1234
+            0x05, 0x7F, // CRC16 (low byte first)
+        ];
+        let expected_response = frame; // repsponse is identical to request frame
+        let mut tx_buf = [0u8; 32];
+
+        let len = server.process_frame(&frame, &mut tx_buf).unwrap();
+        let response = &tx_buf[..len];
+        assert_eq!(response, expected_response);
+        assert_eq!(
+            server.handler.test_registers,
+            [0, 0, 0, 0, 0, 0, 0, 0, 0x1234, 0, 0, 0,]
+        )
+    }
+
+
     // TODO: modbus-core crate has a bug that breaks mnultiple coil write. PR is open, revisit
     // later...
     // #[test]
@@ -460,6 +537,35 @@ mod tests {
     //         [
     //             false, false, false, true, false, true, true, false, false, false, false, false
     //         ]
+    //     )
+    // }
+    // #[test]
+    // fn write_multiple_register() {
+    //     let mycoil = TestData {
+    //         test_coils: [false; 12],
+    //         test_registers: [0; 12],
+    //     };
+    //     let mut server = ModbusRtuServer::new(1, mycoil);
+    //
+    //     let frame: [u8; 17] = [
+    //         0x01, // Slave address
+    //         0x10, // Function code: Write multiple registers
+    //         0x00, 0x08, // Starting address: 8
+    //         0x00, 0x04, // Register count: 4
+    //         0x08, // Byte count: 8
+    //         0x03, 0xE8, 0x07, 0xD0, 0x0B, 0xB8, 0x0F, 0xA0, // Data (1000, 2000, 3000, 4000)
+    //         0x38, 0x52, // CRC16 (low byte first)
+    //     ];
+    //     let expected_response = [ 0x01, 0x10, 0x00, 0x08, 0x00, 0x04, 0x40, 0x08 ];
+    //     let mut tx_buf = [0u8; 32];
+    //
+    //     let len = server.process_frame(&frame, &mut tx_buf).unwrap();
+    //     let response = &tx_buf[..len];
+    //     assert_eq!(response, expected_response);
+    //     assert_eq!(len, expected_response.len());
+    //     assert_eq!(
+    //         server.handler.test_registers,
+    //         [0, 0, 0, 0, 0, 0, 0, 0, 1000, 2000, 3000, 4000,]
     //     )
     // }
 }
