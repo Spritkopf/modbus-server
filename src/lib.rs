@@ -1,16 +1,15 @@
 #![no_std]
 
 use modbus_core::{
-    Coils, Error, Request, Response, ResponsePdu,
     rtu::{
-        Header, ResponseAdu,
-        server::{decode_request, encode_response},
-    },
+        server::{decode_request, encode_response}, Header, ResponseAdu
+    }, Coils, Data, Error, Request, Response, ResponsePdu
 };
 // TODO: add library error type
 
 pub trait ModbusHandler {
     fn read_coils(&mut self, addr: usize, len: usize, out: &mut [bool]) -> Result<usize, Error>;
+    fn read_holding_registers(&mut self, addr: usize, len: usize, out: &mut [u16]) -> Result<usize, Error>;
     fn on_write(&mut self, addr: usize, len: usize, buf: &[bool]) -> Result<usize, Error>;
 }
 
@@ -46,6 +45,26 @@ where
 
                     let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf)?;
                     let response = Response::ReadCoils(coils);
+                    let response_adu = ResponseAdu {
+                        hdr: Header {
+                            slave: self.unit_id,
+                        },
+                        pdu: ResponsePdu(Ok(response)),
+                    };
+                    let tx_len = encode_response(response_adu, tx).ok().unwrap();
+                    return Ok(tx_len as usize);
+                }
+                Request::ReadHoldingRegisters(addr, len) => {
+                    let mut buf = [0u8; 512];
+                    let mut reg_buf = [0u16; 255]; //todo: how much memory is max needed?
+
+                    // call user handler for read_holding_registers
+                    let handler_result =
+                    self.handler
+                        .read_holding_registers(addr as usize, len as usize, &mut reg_buf)?;
+
+                    let data = Data::from_words(&reg_buf[..len as usize], &mut buf)?;
+                    let response = Response::ReadHoldingRegisters(data);
                     let response_adu = ResponseAdu {
                         hdr: Header {
                             slave: self.unit_id,
@@ -106,10 +125,15 @@ mod tests {
     use super::*;
     struct TestData {
         test_coils: [bool; 12],
+        test_registers: [u16; 12],
     }
 
     static TEST_COILS: [bool; 12] = [
         false, true, true, false, true, false, true, false, true, true, false, false,
+    ];
+
+    static TEST_REGISTERS: [u16; 12] = [
+        0, 2, 100, 1000, 3456, 10000, 11111, 11222, 33333, 40987, 55678, 65535,
     ];
 
     impl ModbusHandler for TestData {
@@ -137,11 +161,19 @@ mod tests {
 
             Ok(len)
         }
+
+        fn read_holding_registers(&mut self, addr: usize, len: usize, out: &mut [u16]) -> Result<usize, Error> {
+            // manual memcopy since we have the registers buffered in memory
+            out[..len].copy_from_slice(&TEST_REGISTERS[addr..addr + len]);
+
+            Ok(len)
+        }
     }
     #[test]
     fn read_single_coil() {
         let mycoil = TestData {
             test_coils: [false; 12],
+            test_registers: [0; 12],
         };
         let mut server = ModbusRtuServer::new(1, mycoil);
 
@@ -165,6 +197,7 @@ mod tests {
     fn read_multiple_coils() {
         let mycoil = TestData {
             test_coils: [false; 12],
+            test_registers: [0; 12],
         };
         let mut server = ModbusRtuServer::new(1, mycoil);
 
@@ -180,7 +213,40 @@ mod tests {
 
         let len = server.process_frame(&frame, &mut tx_buf).unwrap();
         let response = &tx_buf[..len];
-        assert_eq!(len, 6);
+        assert_eq!(len, expected_response.len());
+        assert_eq!(response, expected_response);
+    }
+
+    #[test]
+    fn read_holding_registers() {
+        let mycoil = TestData {
+            test_coils: [false; 12],
+            test_registers: [0; 12],
+        };
+        let mut server = ModbusRtuServer::new(1, mycoil);
+
+        let frame: [u8; 8] = [
+            0x01, // Slave address
+            0x03, // Function code: Read Holding Registers
+            0x00, 0x05, // Starting address: 5
+            0x00, 0x04, // Quantity of coils: 4
+            0x54, 0x08, // CRC16 (low byte first)
+        ];
+        let expected_response: [u8; 13] = [
+            0x01, // Slave Address 
+            0x03, // Function Code
+            0x08, // Byte Count
+            0x27, 0x10, // Data byte 0: 10000 
+            0x2B, 0x67, // Data byte 1: 11111 
+            0x2B, 0xD6, // Data byte 2: 11222 
+            0x82, 0x35, // Data byte 3: 33333 
+            0xBC, 0x90, //CRC
+        ];
+        let mut tx_buf = [0u8; 32];
+
+        let len = server.process_frame(&frame, &mut tx_buf).unwrap();
+        let response = &tx_buf[..len];
+        assert_eq!(len, expected_response.len());
         assert_eq!(response, expected_response);
     }
 
@@ -188,6 +254,7 @@ mod tests {
     fn write_single_coil() {
         let mycoil = TestData {
             test_coils: [false; 12],
+            test_registers: [0; 12],
         };
         let mut server = ModbusRtuServer::new(1, mycoil);
 
