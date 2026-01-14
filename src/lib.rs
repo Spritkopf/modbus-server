@@ -52,8 +52,8 @@ where
         if let Some(adu) = request {
             match adu.pdu.0 {
                 Request::ReadCoils(addr, len) => {
-                    let mut buf = [0u8; 255];
-                    let mut coils_buf = [false; 255];
+                    let mut buf = [0u8; 250];
+                    let mut coils_buf = [false; 2000];
 
                     // call user handler for read_coils
                     let _handler_result =
@@ -72,10 +72,10 @@ where
                     return Ok(tx_len as usize);
                 }
                 Request::ReadDiscreteInputs(addr, len) => {
-                    let mut buf = [0u8; 255];
-                    let mut coils_buf = [false; 255];
+                    let mut buf = [0u8; 250];
+                    let mut coils_buf = [false; 2000];
 
-                    // call user handler for read_coils
+                    // call user handler for read_discrete_inputs
                     let _handler_result = self.handler.read_discrete_input(
                         addr as usize,
                         len as usize,
@@ -96,8 +96,8 @@ where
                 Request::ReadHoldingRegisters(addr, len) => {
                     // todo: refactoring, check if input and holding registers can be matched
                     // together since they duplicate a lot of code
-                    let mut buf = [0u8; 512];
-                    let mut reg_buf = [0u16; 255]; //todo: how much memory is max needed?
+                    let mut buf = [0u8; 250];
+                    let mut reg_buf = [0u16; 125];
 
                     // call user handler for read_holding_registers
                     let _handler_result = self.handler.read_holding_registers(
@@ -118,8 +118,8 @@ where
                     return Ok(tx_len as usize);
                 }
                 Request::ReadInputRegisters(addr, len) => {
-                    let mut buf = [0u8; 512];
-                    let mut reg_buf = [0u16; 255]; //todo: how much memory is max needed?
+                    let mut buf = [0u8; 250];
+                    let mut reg_buf = [0u16; 125]; //todo: how much memory is max needed?
 
                     // call user handler for read_holding_registers
                     let _handler_result = self.handler.read_input_registers(

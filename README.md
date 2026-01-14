@@ -38,3 +38,5 @@ responsible to handle the serial communication part.
 - [ ] Documentation
 - [ ] Examples
 - [ ] Memory usage (internal buffers, maximum message size) (external buffers?)
+- [ ] Satisfy Modbus Spec state diagrams
+- [ ] modularize crate structure (not one big lib.rs)
