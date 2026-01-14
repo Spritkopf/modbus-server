@@ -14,6 +14,17 @@ responsible to handle the serial communication part.
 * Individual callbacks for each data type
 * Data types can be (de-)selected by cargo features (default=all)
 
+### Support Request Types
+
+- [X] Read Coils
+- [X] Read Discrete inputs
+- [X] Read Holding Registers
+- [X] Read Input Registers
+- [X] Write Single Coil
+- [ ] Write Single Register
+- [ ] Write Multiple Coils
+- [ ] Write Multiple Registers
+
 ## Example
 
 ```rust
@@ -22,21 +33,11 @@ responsible to handle the serial communication part.
 
 ## Todo
 
-- [ ] Implement missing requests
-    - [X] Read Coils
-    - [X] Read Discrete inputs
-    - [X] Read Holding Registers
-    - [X] Read Input Registers
-    - [X] Write Single Coil
-    - [ ] Write Single Register
-    - [ ] Write Multiple Coils
-    - [ ] Write Multiple Registers
-
+- [ ] Implement missing requests (wait for modbus-core crate update)
 - [ ] Crate Error type
 - [ ] Error handling
 - [ ] Cargo features
 - [ ] Documentation
 - [ ] Examples
-- [ ] Memory usage (internal buffers, maximum message size) (external buffers?)
+- [ ] Memory usage (external buffers?)
 - [ ] Satisfy Modbus Spec state diagrams
-- [ ] modularize crate structure (not one big lib.rs)
