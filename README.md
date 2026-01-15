@@ -34,8 +34,8 @@ responsible to handle the serial communication part.
 ## Todo
 
 - [ ] Implement missing requests (wait for modbus-core crate update)
-- [ ] Crate Error type
-- [ ] Error handling
+- [X] Crate Error type
+- [X] Error handling
 - [ ] Cargo features
 - [ ] Documentation
 - [ ] Examples

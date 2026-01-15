@@ -3,16 +3,17 @@
 pub mod error;
 pub mod handler;
 
+use error::Error;
+use handler::ModbusHandler;
 use modbus_core::{
-    Coils, Data, Exception, ExceptionResponse, FunctionCode, Request,
-    Response, ResponsePdu,
+    Coils, Data, ExceptionResponse, FunctionCode, Request, Response, ResponsePdu,
     rtu::{
         Header, ResponseAdu,
         server::{decode_request, encode_response},
     },
 };
-use error::Error;
-use handler::ModbusHandler;
+
+use crate::error::map_exception;
 
 pub struct ModbusServer<H> {
     unit_id: u8,
@@ -32,7 +33,7 @@ where
 
         if let Some(adu) = request {
             let mut buf = [0u8; 250];
-            let response: Option<Result<Response, Exception>> = match adu.pdu.0 {
+            let response: Result<Response, Error> = match adu.pdu.0 {
                 Request::ReadCoils(addr, len) => {
                     let mut coils_buf = [false; 2000];
 
@@ -42,11 +43,10 @@ where
                         .read_coils(addr as usize, len as usize, &mut coils_buf)
                     {
                         Ok(_) => {
-                            let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf)?;
-                            Some(Ok(Response::ReadCoils(coils)))
+                            let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf).map_err(|_|Error::BufferTooSmall)?;
+                            Ok(Response::ReadCoils(coils))
                         }
-                        Err(Error::Exception(code)) => Some(Err(code)),
-                        Err(e) => return Err(e),
+                        Err(e) => Err(e),
                     }
                 }
                 Request::ReadDiscreteInputs(addr, len) => {
@@ -59,11 +59,10 @@ where
                         &mut coils_buf,
                     ) {
                         Ok(_) => {
-                            let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf)?;
-                            Some(Ok(Response::ReadDiscreteInputs(coils)))
+                            let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf).map_err(|_|Error::BufferTooSmall)?;
+                            Ok(Response::ReadDiscreteInputs(coils))
                         }
-                        Err(Error::Exception(code)) => Some(Err(code)),
-                        Err(e) => return Err(e),
+                        Err(e) => Err(e),
                     }
                 }
                 Request::ReadHoldingRegisters(addr, len) => {
@@ -76,11 +75,10 @@ where
                         &mut reg_buf,
                     ) {
                         Ok(_) => {
-                            let data = Data::from_words(&reg_buf[..len as usize], &mut buf)?;
-                            Some(Ok(Response::ReadHoldingRegisters(data)))
+                            let data = Data::from_words(&reg_buf[..len as usize], &mut buf).map_err(|_|Error::BufferTooSmall)?;
+                            Ok(Response::ReadHoldingRegisters(data))
                         }
-                        Err(Error::Exception(code)) => Some(Err(code)),
-                        Err(e) => return Err(e),
+                        Err(e) => Err(e),
                     }
                 }
                 Request::ReadInputRegisters(addr, len) => {
@@ -93,11 +91,10 @@ where
                         &mut reg_buf,
                     ) {
                         Ok(_) => {
-                            let data = Data::from_words(&reg_buf[..len as usize], &mut buf)?;
-                            Some(Ok(Response::ReadInputRegisters(data)))
+                            let data = Data::from_words(&reg_buf[..len as usize], &mut buf).map_err(|_|Error::BufferTooSmall)?;
+                            Ok(Response::ReadInputRegisters(data))
                         }
-                        Err(Error::Exception(code)) => Some(Err(code)),
-                        Err(e) => return Err(e),
+                        Err(e) => Err(e),
                     }
                 }
                 Request::WriteSingleCoil(addr, value) => {
@@ -114,11 +111,11 @@ where
                             if num_written_coils == 1 {
                                 // We return here since we can't build a valid Response for now
                                 return Ok(rx.len());
+                            } else {
+                                Err(Error::Application)
                             }
-                            None
                         }
-                        Err(Error::Exception(code)) => Some(Err(code)),
-                        Err(e) => return Err(e),
+                        Err(e) => Err(e),
                     }
                 }
                 Request::WriteSingleRegister(addr, value) => {
@@ -126,56 +123,51 @@ where
 
                     // call user handler for read_coils
                     match self.handler.write_registers(addr as usize, 1, &reg_buf) {
-                        Ok(_) => Some(Ok(Response::WriteSingleRegister(addr, value))),
-                        Err(Error::Exception(code)) => Some(Err(code)),
-                        Err(e) => return Err(e),
+                        Ok(_) => Ok(Response::WriteSingleRegister(addr, value)),
+                        Err(e) => Err(e),
                     }
                 }
-                _ => None,
+                _ => Err(Error::NotSupported),
             };
 
-            if let Some(res) = response {
-                let function_code = match res {
-                    Ok(ref r) => match r {
-                        Response::ReadCoils(_) => FunctionCode::ReadCoils,
-                        Response::ReadDiscreteInputs(_) => FunctionCode::ReadDiscreteInputs,
-                        Response::ReadHoldingRegisters(_) => FunctionCode::ReadHoldingRegisters,
-                        Response::ReadInputRegisters(_) => FunctionCode::ReadInputRegisters,
-                        Response::WriteSingleCoil(_) => FunctionCode::WriteSingleCoil,
-                        Response::WriteSingleRegister(_, _) => FunctionCode::WriteSingleRegister,
-                        _ => FunctionCode::ReadCoils, // Fallback, though should match request
-                    },
-                    Err(_) => match adu.pdu.0 {
-                        Request::ReadCoils(_, _) => FunctionCode::ReadCoils,
-                        Request::ReadDiscreteInputs(_, _) => FunctionCode::ReadDiscreteInputs,
-                        Request::ReadHoldingRegisters(_, _) => FunctionCode::ReadHoldingRegisters,
-                        Request::ReadInputRegisters(_, _) => FunctionCode::ReadInputRegisters,
-                        Request::WriteSingleCoil(_, _) => FunctionCode::WriteSingleCoil,
-                        Request::WriteSingleRegister(_, _) => FunctionCode::WriteSingleRegister,
-                        _ => FunctionCode::ReadCoils, // Fallback
-                    },
-                };
+            let function_code = match response {
+                Ok(ref r) => match r {
+                    Response::ReadCoils(_) => FunctionCode::ReadCoils,
+                    Response::ReadDiscreteInputs(_) => FunctionCode::ReadDiscreteInputs,
+                    Response::ReadHoldingRegisters(_) => FunctionCode::ReadHoldingRegisters,
+                    Response::ReadInputRegisters(_) => FunctionCode::ReadInputRegisters,
+                    Response::WriteSingleCoil(_) => FunctionCode::WriteSingleCoil,
+                    Response::WriteSingleRegister(_, _) => FunctionCode::WriteSingleRegister,
+                    _ => FunctionCode::ReadCoils, // Fallback, though should match request
+                },
+                Err(_) => match adu.pdu.0 {
+                    Request::ReadCoils(_, _) => FunctionCode::ReadCoils,
+                    Request::ReadDiscreteInputs(_, _) => FunctionCode::ReadDiscreteInputs,
+                    Request::ReadHoldingRegisters(_, _) => FunctionCode::ReadHoldingRegisters,
+                    Request::ReadInputRegisters(_, _) => FunctionCode::ReadInputRegisters,
+                    Request::WriteSingleCoil(_, _) => FunctionCode::WriteSingleCoil,
+                    Request::WriteSingleRegister(_, _) => FunctionCode::WriteSingleRegister,
+                    _ => FunctionCode::ReadCoils, // Fallback
+                },
+            };
 
-                let response_pdu = match res {
-                    Ok(r) => ResponsePdu(Ok(r)),
-                    Err(e) => ResponsePdu(Err(ExceptionResponse {
-                        function: function_code,
-                        exception: e,
-                    })),
-                };
+            let response_pdu = match response {
+                Ok(r) => ResponsePdu(Ok(r)),
+                Err(e) => ResponsePdu(Err(ExceptionResponse {
+                    function: function_code,
+                    exception: map_exception(e)
+                })),
+            };
 
-                let response_adu = ResponseAdu {
-                    hdr: Header {
-                        slave: self.unit_id,
-                    },
-                    pdu: response_pdu,
-                };
+            let response_adu = ResponseAdu {
+                hdr: Header {
+                    slave: self.unit_id,
+                },
+                pdu: response_pdu,
+            };
 
-                let tx_len =
-                    encode_response(response_adu, tx).map_err(|_| Error::BufferTooSmall)?;
-                return Ok(tx_len as usize);
-            }
-            return Ok(0);
+            let tx_len = encode_response(response_adu, tx).map_err(|_| Error::BufferTooSmall)?;
+            return Ok(tx_len as usize);
         }
         Ok(0)
     }
@@ -470,6 +462,7 @@ mod tests {
         )
     }
 
+    // Test exception handling
     struct ExceptionHandler;
     impl ModbusHandler for ExceptionHandler {
         fn read_coils(
@@ -478,7 +471,7 @@ mod tests {
             _len: usize,
             _out: &mut [bool],
         ) -> Result<usize, Error> {
-            Err(Error::Exception(Exception::IllegalDataAddress))
+            Err(Error::InvalidAddress)
         }
     }
 

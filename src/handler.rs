@@ -35,3 +35,4 @@ pub trait ModbusHandler {
         Ok(0)
     }
 }
+
