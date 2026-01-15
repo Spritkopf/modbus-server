@@ -1,13 +1,26 @@
 #![no_std]
 
 use modbus_core::{
-    Coils, Data, Error, Request, Response, ResponsePdu,
+    Coils, Data, Error as ModbusError, Exception, ExceptionResponse, FunctionCode, Request,
+    Response, ResponsePdu,
     rtu::{
         Header, ResponseAdu,
         server::{decode_request, encode_response},
     },
 };
-// TODO: add library error type
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Error {
+    Modbus(ModbusError),
+    BufferTooSmall,
+    Exception(Exception),
+}
+
+impl From<ModbusError> for Error {
+    fn from(e: ModbusError) -> Self {
+        Error::Modbus(e)
+    }
+}
 
 pub trait ModbusHandler {
     fn read_coils(&mut self, _addr: usize, _len: usize, _out: &mut [bool]) -> Result<usize, Error> {
@@ -63,95 +76,150 @@ where
 
         if let Some(adu) = request {
             let mut buf = [0u8; 250];
-            let response: Option<Response> = match adu.pdu.0 {
+            let response: Option<Result<Response, Exception>> = match adu.pdu.0 {
                 Request::ReadCoils(addr, len) => {
                     let mut coils_buf = [false; 2000];
 
                     // call user handler for read_coils
-                    let _handler_result =
-                        self.handler
-                            .read_coils(addr as usize, len as usize, &mut coils_buf)?;
-
-                    let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf)?;
-                    Some(Response::ReadCoils(coils))
+                    match self
+                        .handler
+                        .read_coils(addr as usize, len as usize, &mut coils_buf)
+                    {
+                        Ok(_) => {
+                            let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf)?;
+                            Some(Ok(Response::ReadCoils(coils)))
+                        }
+                        Err(Error::Exception(code)) => Some(Err(code)),
+                        Err(e) => return Err(e),
+                    }
                 }
                 Request::ReadDiscreteInputs(addr, len) => {
                     let mut coils_buf = [false; 2000];
 
                     // call user handler for read_discrete_inputs
-                    let _handler_result = self.handler.read_discrete_input(
+                    match self.handler.read_discrete_input(
                         addr as usize,
                         len as usize,
                         &mut coils_buf,
-                    )?;
-
-                    let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf)?;
-                    Some(Response::ReadDiscreteInputs(coils))
+                    ) {
+                        Ok(_) => {
+                            let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf)?;
+                            Some(Ok(Response::ReadDiscreteInputs(coils)))
+                        }
+                        Err(Error::Exception(code)) => Some(Err(code)),
+                        Err(e) => return Err(e),
+                    }
                 }
                 Request::ReadHoldingRegisters(addr, len) => {
                     let mut reg_buf = [0u16; 125];
 
                     // call user handler for read_holding_registers
-                    let _handler_result = self.handler.read_holding_registers(
+                    match self.handler.read_holding_registers(
                         addr as usize,
                         len as usize,
                         &mut reg_buf,
-                    )?;
-
-                    let data = Data::from_words(&reg_buf[..len as usize], &mut buf)?;
-                    Some(Response::ReadHoldingRegisters(data))
+                    ) {
+                        Ok(_) => {
+                            let data = Data::from_words(&reg_buf[..len as usize], &mut buf)?;
+                            Some(Ok(Response::ReadHoldingRegisters(data)))
+                        }
+                        Err(Error::Exception(code)) => Some(Err(code)),
+                        Err(e) => return Err(e),
+                    }
                 }
                 Request::ReadInputRegisters(addr, len) => {
                     let mut reg_buf = [0u16; 125];
 
                     // call user handler for read_holding_registers
-                    let _handler_result = self.handler.read_input_registers(
+                    match self.handler.read_input_registers(
                         addr as usize,
                         len as usize,
                         &mut reg_buf,
-                    )?;
-
-                    let data = Data::from_words(&reg_buf[..len as usize], &mut buf)?;
-                    Some(Response::ReadInputRegisters(data))
+                    ) {
+                        Ok(_) => {
+                            let data = Data::from_words(&reg_buf[..len as usize], &mut buf)?;
+                            Some(Ok(Response::ReadInputRegisters(data)))
+                        }
+                        Err(Error::Exception(code)) => Some(Err(code)),
+                        Err(e) => return Err(e),
+                    }
                 }
                 Request::WriteSingleCoil(addr, value) => {
                     let coils_buf = [value];
 
                     // call user handler for read_coils
-                    let num_written_coils =
-                        self.handler.write_coils(addr as usize, 1, &coils_buf)?;
+                    match self.handler.write_coils(addr as usize, 1, &coils_buf) {
+                        Ok(num_written_coils) => {
+                            // workaround for bug in modbus-core crate: not encoding a response because the
+                            // Response::WriteSingleCoil enum is not correct. Since the modbus spec states the response is an
+                            // echo of the request, we are just doing that
+                            tx[..rx.len()].copy_from_slice(rx);
 
-                    // workaround for bug in modbus-core crate: not encoding a response because the
-                    // Response::WriteSingleCoil enum is not correct. Since the modbus spec states the response is an
-                    // echo of the request, we are just doing that
-                    tx[..rx.len()].copy_from_slice(rx);
-
-                    if num_written_coils == 1 {
-                        // We return here since we can't build a valid Response for now
-                        return Ok(rx.len());
+                            if num_written_coils == 1 {
+                                // We return here since we can't build a valid Response for now
+                                return Ok(rx.len());
+                            }
+                            None
+                        }
+                        Err(Error::Exception(code)) => Some(Err(code)),
+                        Err(e) => return Err(e),
                     }
-                    None
                 }
                 Request::WriteSingleRegister(addr, value) => {
                     let reg_buf = [value];
 
                     // call user handler for read_coils
-                    let _num_written_regs =
-                        self.handler.write_registers(addr as usize, 1, &reg_buf)?;
-
-                    Some(Response::WriteSingleRegister(addr, value))
+                    match self.handler.write_registers(addr as usize, 1, &reg_buf) {
+                        Ok(_) => Some(Ok(Response::WriteSingleRegister(addr, value))),
+                        Err(Error::Exception(code)) => Some(Err(code)),
+                        Err(e) => return Err(e),
+                    }
                 }
                 _ => None,
             };
 
-            let response_adu = ResponseAdu {
-                hdr: Header {
-                    slave: self.unit_id,
-                },
-                pdu: ResponsePdu(Ok(response.unwrap())),
-            };
-            let tx_len = encode_response(response_adu, tx).ok().unwrap();
-            return Ok(tx_len as usize);
+            if let Some(res) = response {
+                let function_code = match res {
+                    Ok(ref r) => match r {
+                        Response::ReadCoils(_) => FunctionCode::ReadCoils,
+                        Response::ReadDiscreteInputs(_) => FunctionCode::ReadDiscreteInputs,
+                        Response::ReadHoldingRegisters(_) => FunctionCode::ReadHoldingRegisters,
+                        Response::ReadInputRegisters(_) => FunctionCode::ReadInputRegisters,
+                        Response::WriteSingleCoil(_) => FunctionCode::WriteSingleCoil,
+                        Response::WriteSingleRegister(_, _) => FunctionCode::WriteSingleRegister,
+                        _ => FunctionCode::ReadCoils, // Fallback, though should match request
+                    },
+                    Err(_) => match adu.pdu.0 {
+                        Request::ReadCoils(_, _) => FunctionCode::ReadCoils,
+                        Request::ReadDiscreteInputs(_, _) => FunctionCode::ReadDiscreteInputs,
+                        Request::ReadHoldingRegisters(_, _) => FunctionCode::ReadHoldingRegisters,
+                        Request::ReadInputRegisters(_, _) => FunctionCode::ReadInputRegisters,
+                        Request::WriteSingleCoil(_, _) => FunctionCode::WriteSingleCoil,
+                        Request::WriteSingleRegister(_, _) => FunctionCode::WriteSingleRegister,
+                        _ => FunctionCode::ReadCoils, // Fallback
+                    },
+                };
+
+                let response_pdu = match res {
+                    Ok(r) => ResponsePdu(Ok(r)),
+                    Err(e) => ResponsePdu(Err(ExceptionResponse {
+                        function: function_code,
+                        exception: e,
+                    })),
+                };
+
+                let response_adu = ResponseAdu {
+                    hdr: Header {
+                        slave: self.unit_id,
+                    },
+                    pdu: response_pdu,
+                };
+
+                let tx_len =
+                    encode_response(response_adu, tx).map_err(|_| Error::BufferTooSmall)?;
+                return Ok(tx_len as usize);
+            }
+            return Ok(0);
         }
         Ok(0)
     }
@@ -444,5 +512,40 @@ mod tests {
             server.handler.test_registers,
             [0, 0, 0, 0, 0, 0, 0, 0, 0x1234, 0, 0, 0,]
         )
+    }
+
+    struct ExceptionHandler;
+    impl ModbusHandler for ExceptionHandler {
+        fn read_coils(
+            &mut self,
+            _addr: usize,
+            _len: usize,
+            _out: &mut [bool],
+        ) -> Result<usize, Error> {
+            Err(Error::Exception(Exception::IllegalDataAddress))
+        }
+    }
+
+    #[test]
+    fn return_exception() {
+        let mut server = ModbusRtuServer::new(1, ExceptionHandler);
+
+        let frame: [u8; 8] = [
+            0x01, // Slave address
+            0x01, // Function code: Read Coils
+            0x00, 0x00, // Starting address: 0
+            0x00, 0x01, // Quantity of coils: 1
+            0xFD, 0xCA, // CRC16
+        ];
+
+        let mut tx_buf = [0u8; 32];
+        let len = server.process_frame(&frame, &mut tx_buf).unwrap();
+        let response = &tx_buf[..len];
+
+        // Expected: [0x01, 0x81, 0x02, CRC_LO, CRC_HI]
+        assert_eq!(len, 5);
+        assert_eq!(response[0], 0x01); // Unit ID
+        assert_eq!(response[1], 0x81); // Exception Function Code (0x01 | 0x80)
+        assert_eq!(response[2], 0x02); // Exception Code (IllegalDataAddress)
     }
 }
