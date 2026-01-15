@@ -9,24 +9,24 @@ use modbus_core::{
 };
 // TODO: add library error type
 
-pub trait CoilHandler {
+pub trait ModbusHandler {
+    fn read_coils(&mut self, addr: usize, len: usize, out: &mut [bool]) -> Result<usize, Error>;
     fn on_write(&mut self, addr: usize, len: usize, buf: &[bool]) -> Result<usize, Error>;
-    fn on_read(&mut self, addr: usize, len: usize, buf: &mut [bool]) -> Result<usize, Error>;
 }
 
 pub struct ModbusRtuServer<H> {
     unit_id: u8,
-    coil_handler: H,
+    handler: H,
 }
 
 impl<H> ModbusRtuServer<H>
 where
-    H: CoilHandler,
+    H: ModbusHandler,
 {
-    pub fn new(unit_id: u8, coil_handler: H) -> Self {
+    pub fn new(unit_id: u8, handler: H) -> Self {
         Self {
             unit_id,
-            coil_handler,
+            handler,
         }
     }
 
@@ -41,8 +41,8 @@ where
 
                     // call user handler for read_coils
                     let handler_result =
-                        self.coil_handler
-                            .on_read(addr as usize, len as usize, &mut coils_buf)?;
+                        self.handler
+                            .read_coils(addr as usize, len as usize, &mut coils_buf)?;
 
                     let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf)?;
                     let response = Response::ReadCoils(coils);
@@ -60,7 +60,7 @@ where
 
                     // call user handler for read_coils
                     let num_written_coils =
-                        self.coil_handler.on_write(addr as usize, 1, &coils_buf)?;
+                        self.handler.on_write(addr as usize, 1, &coils_buf)?;
 
                     // workaround for bug in modbus-core crate: not encoding a response because the
                     // Response::WriteSingleCoil enum is not correct. Since the modbus spec states the response is an
@@ -104,7 +104,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    struct MyCoil {
+    struct TestData {
         test_coils: [bool; 12],
     }
 
@@ -112,7 +112,7 @@ mod tests {
         false, true, true, false, true, false, true, false, true, true, false, false,
     ];
 
-    impl CoilHandler for MyCoil {
+    impl ModbusHandler for TestData {
         fn on_write(&mut self, addr: usize, len: usize, buf: &[bool]) -> Result<usize, Error> {
             // The variant below iterates through the written coils, this way the application
             // could write states to peripherals when the coils are not buffered in memory...
@@ -124,9 +124,9 @@ mod tests {
             Ok(len)
         }
 
-        fn on_read(&mut self, addr: usize, len: usize, buf: &mut [bool]) -> Result<usize, Error> {
+        fn read_coils(&mut self, addr: usize, len: usize, out: &mut [bool]) -> Result<usize, Error> {
             // manual memcopy since we have the coils states buffered in memory
-            buf[..len].copy_from_slice(&TEST_COILS[addr..addr + len]);
+            out[..len].copy_from_slice(&TEST_COILS[addr..addr + len]);
 
             // The variant below iterates through the requested coils, this way the application
             // could read individual states from peripherals when the coils are not buffered in memory...
@@ -140,7 +140,7 @@ mod tests {
     }
     #[test]
     fn read_single_coil() {
-        let mycoil = MyCoil {
+        let mycoil = TestData {
             test_coils: [false; 12],
         };
         let mut server = ModbusRtuServer::new(1, mycoil);
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn read_multiple_coils() {
-        let mycoil = MyCoil {
+        let mycoil = TestData {
             test_coils: [false; 12],
         };
         let mut server = ModbusRtuServer::new(1, mycoil);
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn write_single_coil() {
-        let mycoil = MyCoil {
+        let mycoil = TestData {
             test_coils: [false; 12],
         };
         let mut server = ModbusRtuServer::new(1, mycoil);
@@ -205,7 +205,7 @@ mod tests {
         let response = &tx_buf[..len];
         assert_eq!(response, expected_response);
         assert_eq!(
-            server.coil_handler.test_coils,
+            server.handler.test_coils,
             [
                 false, false, false, true, false, false, false, false, false, false, false, false
             ]
