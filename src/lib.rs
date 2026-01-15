@@ -1,26 +1,16 @@
 #![no_std]
 
+pub mod error;
+
 use modbus_core::{
-    Coils, Data, Error as ModbusError, Exception, ExceptionResponse, FunctionCode, Request,
+    Coils, Data, Exception, ExceptionResponse, FunctionCode, Request,
     Response, ResponsePdu,
     rtu::{
         Header, ResponseAdu,
         server::{decode_request, encode_response},
     },
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Error {
-    Modbus(ModbusError),
-    BufferTooSmall,
-    Exception(Exception),
-}
-
-impl From<ModbusError> for Error {
-    fn from(e: ModbusError) -> Self {
-        Error::Modbus(e)
-    }
-}
+use error::Error;
 
 pub trait ModbusHandler {
     fn read_coils(&mut self, _addr: usize, _len: usize, _out: &mut [bool]) -> Result<usize, Error> {
