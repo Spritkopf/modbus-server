@@ -10,27 +10,39 @@ use modbus_core::{
 // TODO: add library error type
 
 pub trait ModbusHandler {
-    fn read_coils(&mut self, addr: usize, len: usize, out: &mut [bool]) -> Result<usize, Error>;
+    fn read_coils(&mut self, _addr: usize, _len: usize, _out: &mut [bool]) -> Result<usize, Error> {
+        Ok(0)
+    }
     fn read_discrete_input(
         &mut self,
-        addr: usize,
-        len: usize,
-        out: &mut [bool],
-    ) -> Result<usize, Error>;
+        _addr: usize,
+        _len: usize,
+        _out: &mut [bool],
+    ) -> Result<usize, Error> {
+        Ok(0)
+    }
     fn read_holding_registers(
         &mut self,
-        addr: usize,
-        len: usize,
-        out: &mut [u16],
-    ) -> Result<usize, Error>;
+        _addr: usize,
+        _len: usize,
+        _out: &mut [u16],
+    ) -> Result<usize, Error> {
+        Ok(0)
+    }
     fn read_input_registers(
         &mut self,
-        addr: usize,
-        len: usize,
-        out: &mut [u16],
-    ) -> Result<usize, Error>;
-    fn write_coils(&mut self, addr: usize, len: usize, buf: &[bool]) -> Result<usize, Error>;
-    fn write_registers(&mut self, addr: usize, len: usize, buf: &[u16]) -> Result<usize, Error>;
+        _addr: usize,
+        _len: usize,
+        _out: &mut [u16],
+    ) -> Result<usize, Error> {
+        Ok(0)
+    }
+    fn write_coils(&mut self, _addr: usize, _len: usize, _buf: &[bool]) -> Result<usize, Error> {
+        Ok(0)
+    }
+    fn write_registers(&mut self, _addr: usize, _len: usize, _buf: &[u16]) -> Result<usize, Error> {
+        Ok(0)
+    }
 }
 
 pub struct ModbusRtuServer<H> {
@@ -127,9 +139,9 @@ where
                     let _num_written_regs =
                         self.handler.write_registers(addr as usize, 1, &reg_buf)?;
 
-                   Some(Response::WriteSingleRegister(addr, value))
+                    Some(Response::WriteSingleRegister(addr, value))
                 }
-                _ => {None}
+                _ => None,
             };
 
             let response_adu = ResponseAdu {
