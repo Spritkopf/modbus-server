@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod error;
+pub mod handler;
 
 use modbus_core::{
     Coils, Data, Exception, ExceptionResponse, FunctionCode, Request,
@@ -11,49 +12,14 @@ use modbus_core::{
     },
 };
 use error::Error;
+use handler::ModbusHandler;
 
-pub trait ModbusHandler {
-    fn read_coils(&mut self, _addr: usize, _len: usize, _out: &mut [bool]) -> Result<usize, Error> {
-        Ok(0)
-    }
-    fn read_discrete_input(
-        &mut self,
-        _addr: usize,
-        _len: usize,
-        _out: &mut [bool],
-    ) -> Result<usize, Error> {
-        Ok(0)
-    }
-    fn read_holding_registers(
-        &mut self,
-        _addr: usize,
-        _len: usize,
-        _out: &mut [u16],
-    ) -> Result<usize, Error> {
-        Ok(0)
-    }
-    fn read_input_registers(
-        &mut self,
-        _addr: usize,
-        _len: usize,
-        _out: &mut [u16],
-    ) -> Result<usize, Error> {
-        Ok(0)
-    }
-    fn write_coils(&mut self, _addr: usize, _len: usize, _buf: &[bool]) -> Result<usize, Error> {
-        Ok(0)
-    }
-    fn write_registers(&mut self, _addr: usize, _len: usize, _buf: &[u16]) -> Result<usize, Error> {
-        Ok(0)
-    }
-}
-
-pub struct ModbusRtuServer<H> {
+pub struct ModbusServer<H> {
     unit_id: u8,
     handler: H,
 }
 
-impl<H> ModbusRtuServer<H>
+impl<H> ModbusServer<H>
 where
     H: ModbusHandler,
 {
@@ -321,7 +287,7 @@ mod tests {
             test_coils: [false; 12],
             test_registers: [0; 12],
         };
-        let mut server = ModbusRtuServer::new(1, mycoil);
+        let mut server = ModbusServer::new(1, mycoil);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -345,7 +311,7 @@ mod tests {
             test_coils: [false; 12],
             test_registers: [0; 12],
         };
-        let mut server = ModbusRtuServer::new(1, mycoil);
+        let mut server = ModbusServer::new(1, mycoil);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -369,7 +335,7 @@ mod tests {
             test_coils: [false; 12],
             test_registers: [0; 12],
         };
-        let mut server = ModbusRtuServer::new(1, mycoil);
+        let mut server = ModbusServer::new(1, mycoil);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -393,7 +359,7 @@ mod tests {
             test_coils: [false; 12],
             test_registers: [0; 12],
         };
-        let mut server = ModbusRtuServer::new(1, mycoil);
+        let mut server = ModbusServer::new(1, mycoil);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -426,7 +392,7 @@ mod tests {
             test_coils: [false; 12],
             test_registers: [0; 12],
         };
-        let mut server = ModbusRtuServer::new(1, mycoil);
+        let mut server = ModbusServer::new(1, mycoil);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -454,7 +420,7 @@ mod tests {
             test_coils: [false; 12],
             test_registers: [0; 12],
         };
-        let mut server = ModbusRtuServer::new(1, mycoil);
+        let mut server = ModbusServer::new(1, mycoil);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -483,7 +449,7 @@ mod tests {
             test_coils: [false; 12],
             test_registers: [0; 12],
         };
-        let mut server = ModbusRtuServer::new(1, mycoil);
+        let mut server = ModbusServer::new(1, mycoil);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -518,7 +484,7 @@ mod tests {
 
     #[test]
     fn return_exception() {
-        let mut server = ModbusRtuServer::new(1, ExceptionHandler);
+        let mut server = ModbusServer::new(1, ExceptionHandler);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
