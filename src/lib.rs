@@ -16,8 +16,12 @@ use modbus_core::{
 use crate::error::map_exception;
 
 pub struct ModbusServer<H> {
+    /// Modbus slave ID
     unit_id: u8,
+    /// Handler object implementing ModbusHandler traits
     handler: H,
+    /// buffer for building response data
+    buf: [u8; 250],
 }
 
 impl<H> ModbusServer<H>
@@ -25,14 +29,17 @@ where
     H: ModbusHandler,
 {
     pub fn new(unit_id: u8, handler: H) -> Self {
-        Self { unit_id, handler }
+        Self {
+            unit_id,
+            handler,
+            buf: [0u8; 250],
+        }
     }
 
     pub fn process_frame(&mut self, rx: &[u8], tx: &mut [u8]) -> Result<usize, Error> {
         let request = decode_request(rx).unwrap_or_default();
 
         if let Some(adu) = request {
-            let mut buf = [0u8; 250];
             let response: Result<Response, Error> = match adu.pdu.0 {
                 Request::ReadCoils(addr, len) => {
                     let mut coils_buf = [false; 2000];
@@ -43,7 +50,9 @@ where
                         .read_coils(addr as usize, len as usize, &mut coils_buf)
                     {
                         Ok(_) => {
-                            let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf).map_err(|_|Error::BufferTooSmall)?;
+                            let coils =
+                                Coils::from_bools(&coils_buf[..len as usize], &mut self.buf)
+                                    .map_err(|_| Error::BufferTooSmall)?;
                             Ok(Response::ReadCoils(coils))
                         }
                         Err(e) => Err(e),
@@ -59,7 +68,9 @@ where
                         &mut coils_buf,
                     ) {
                         Ok(_) => {
-                            let coils = Coils::from_bools(&coils_buf[..len as usize], &mut buf).map_err(|_|Error::BufferTooSmall)?;
+                            let coils =
+                                Coils::from_bools(&coils_buf[..len as usize], &mut self.buf)
+                                    .map_err(|_| Error::BufferTooSmall)?;
                             Ok(Response::ReadDiscreteInputs(coils))
                         }
                         Err(e) => Err(e),
@@ -75,7 +86,8 @@ where
                         &mut reg_buf,
                     ) {
                         Ok(_) => {
-                            let data = Data::from_words(&reg_buf[..len as usize], &mut buf).map_err(|_|Error::BufferTooSmall)?;
+                            let data = Data::from_words(&reg_buf[..len as usize], &mut self.buf)
+                                .map_err(|_| Error::BufferTooSmall)?;
                             Ok(Response::ReadHoldingRegisters(data))
                         }
                         Err(e) => Err(e),
@@ -91,7 +103,8 @@ where
                         &mut reg_buf,
                     ) {
                         Ok(_) => {
-                            let data = Data::from_words(&reg_buf[..len as usize], &mut buf).map_err(|_|Error::BufferTooSmall)?;
+                            let data = Data::from_words(&reg_buf[..len as usize], &mut self.buf)
+                                .map_err(|_| Error::BufferTooSmall)?;
                             Ok(Response::ReadInputRegisters(data))
                         }
                         Err(e) => Err(e),
@@ -155,7 +168,7 @@ where
                 Ok(r) => ResponsePdu(Ok(r)),
                 Err(e) => ResponsePdu(Err(ExceptionResponse {
                     function: function_code,
-                    exception: map_exception(e)
+                    exception: map_exception(e),
                 })),
             };
 
@@ -275,11 +288,11 @@ mod tests {
 
     #[test]
     fn read_single_coil() {
-        let mycoil = TestData {
+        let testdata = TestData {
             test_coils: [false; 12],
             test_registers: [0; 12],
         };
-        let mut server = ModbusServer::new(1, mycoil);
+        let mut server = ModbusServer::new(1, testdata);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -299,11 +312,11 @@ mod tests {
 
     #[test]
     fn read_discrete_input() {
-        let mycoil = TestData {
+        let testdata = TestData {
             test_coils: [false; 12],
             test_registers: [0; 12],
         };
-        let mut server = ModbusServer::new(1, mycoil);
+        let mut server = ModbusServer::new(1, testdata);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -323,11 +336,11 @@ mod tests {
 
     #[test]
     fn read_multiple_coils() {
-        let mycoil = TestData {
+        let testdata = TestData {
             test_coils: [false; 12],
             test_registers: [0; 12],
         };
-        let mut server = ModbusServer::new(1, mycoil);
+        let mut server = ModbusServer::new(1, testdata);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -347,11 +360,11 @@ mod tests {
 
     #[test]
     fn read_holding_registers() {
-        let mycoil = TestData {
+        let testdata = TestData {
             test_coils: [false; 12],
             test_registers: [0; 12],
         };
-        let mut server = ModbusServer::new(1, mycoil);
+        let mut server = ModbusServer::new(1, testdata);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -380,11 +393,11 @@ mod tests {
 
     #[test]
     fn read_input_registers() {
-        let mycoil = TestData {
+        let testdata = TestData {
             test_coils: [false; 12],
             test_registers: [0; 12],
         };
-        let mut server = ModbusServer::new(1, mycoil);
+        let mut server = ModbusServer::new(1, testdata);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -408,11 +421,11 @@ mod tests {
 
     #[test]
     fn write_single_coil() {
-        let mycoil = TestData {
+        let testdata = TestData {
             test_coils: [false; 12],
             test_registers: [0; 12],
         };
-        let mut server = ModbusServer::new(1, mycoil);
+        let mut server = ModbusServer::new(1, testdata);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -437,11 +450,11 @@ mod tests {
 
     #[test]
     fn write_single_register() {
-        let mycoil = TestData {
+        let testdata = TestData {
             test_coils: [false; 12],
             test_registers: [0; 12],
         };
-        let mut server = ModbusServer::new(1, mycoil);
+        let mut server = ModbusServer::new(1, testdata);
 
         let frame: [u8; 8] = [
             0x01, // Slave address
@@ -476,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn return_exception() {
+    fn userhandler_exception() {
         let mut server = ModbusServer::new(1, ExceptionHandler);
 
         let frame: [u8; 8] = [
