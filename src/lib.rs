@@ -1,3 +1,58 @@
+//! # Modbus RTU Server
+//!
+//! This crate provides a `no_std` Modbus RTU server implementation
+//! intended for embedded systems.
+//!
+//! The design is split into two logical layers:
+//!
+//! - **Protocol layer**: Decodes Modbus RTU frames, dispatches requests, and
+//!   encodes responses.
+//! - **Application layer**: User-defined handlers provide access to coils,
+//!   discrete inputs, holding registers, and input registers.
+//!
+//! ## Framing and timing
+//!
+//! This crate operates on *complete Modbus RTU frames*. Detection of frame
+//! boundaries (RTU timing, idle-line detection, or buffering) is intentionally
+//! left to the application
+//!
+//! ## Usage overview
+//!
+//! 1. Define a struct that implements the [`ModbusHandler`] trait, pass it to initialization
+//! 1. Receive a complete Modbus RTU frame from the serial transport
+//! 2. Pass the frame to [`ModbusServer::process_frame`]
+//! 3. Transmit the generated response bytes
+//!
+//! ```no_run
+//! use modbus_server::{ModbusServer, handler::ModbusHandler};
+//!
+//! let rx_frame = [0u8;4]; // imaginary modbus frame, input from UART
+//! struct MyHandler;
+//! impl ModbusHandler for MyHandler {
+//! // [...] implement handler functions you need
+//! }
+//! let handler = MyHandler {};
+//! let mut server = ModbusServer::new(1, handler); // 1 is the device slave ID
+//! let mut tx_buf = [0u8; 256];
+//!
+//! if let Ok(len) = server.process_frame(&rx_frame, &mut tx_buf) {
+//!     // handle your uart transmission 
+//!     // uart.write(&tx_buf[..len]);
+//! }
+//! ```
+//!
+//! ## Handler model
+//!
+//! Application logic is implemented by providing a type that implements the
+//! [`ModbusHandler`] trait. The handler is responsible for performing the actual
+//! read/write operations and may interact with hardware, internal state, or
+//! other subsystems.
+//!
+//! Only the required handler methods need to be implemented; unsupported
+//! function codes are automatically rejected with the appropriate Modbus
+//! exception response (IllegalFunction).
+//!
+
 #![no_std]
 
 pub mod error;
@@ -18,7 +73,7 @@ use crate::error::map_exception;
 pub struct ModbusServer<H> {
     /// Modbus slave ID
     unit_id: u8,
-    /// Handler object implementing ModbusHandler traits
+    /// Handler object implementing [`ModbusHandler`] traits
     handler: H,
     /// buffer for building response data
     buf: [u8; 250],
@@ -28,6 +83,16 @@ impl<H> ModbusServer<H>
 where
     H: ModbusHandler,
 {
+    /// Create a new Modbus RTU server instance.
+    ///
+    /// # Parameters
+    ///
+    /// * `unit_id` - Modbus slave (unit) identifier for this server.
+    /// * `handler` - Application-defined handler implementing [`ModbusHandler`].
+    ///
+    /// # Returns
+    ///
+    /// A new [`ModbusServer`] instance ready to process Modbus RTU frames.
     pub fn new(unit_id: u8, handler: H) -> Self {
         Self {
             unit_id,
@@ -36,6 +101,36 @@ where
         }
     }
 
+    /// Process a single complete Modbus RTU request frame.
+    ///
+    /// This function parses and validates the received RTU frame, dispatches
+    /// the request to the user-provided handler, and encodes the corresponding
+    /// response frame.
+    ///
+    /// The caller is responsible for providing complete RTU frames, including
+    /// slave address and CRC. Frame timing and UART handling are out of scope.
+    ///
+    /// The function returns the length of the response frame. In case of a parsing error of the
+    /// Frame, no response is generated, thus the result is 0. This is no error but a 'skip'.
+    /// Errors returned by this function exclusively come from the user handlers, see
+    /// [`ModbusHandler`]
+    ///
+    /// # Parameters
+    ///
+    /// * `rx` - Received Modbus RTU frame (including unit ID and CRC).
+    /// * `tx` - Output buffer where the response frame will be written. Must be large enough to hold the maximum possible Modbus response (typically up to 256 bytes including CRC).
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(len)` - Number of bytes written to `tx` containing the response frame.
+    /// * `Err(Error)` - If the frame is invalid, addressed to a different unit,
+    ///   or the request cannot be processed.
+    ///
+    /// # Notes
+    ///
+    /// Broadcast frames (unit ID = 0) may be accepted or ignored depending on
+    /// the handler implementation and application requirements.
+    /// ```
     pub fn process_frame(&mut self, rx: &[u8], tx: &mut [u8]) -> Result<usize, Error> {
         let request = decode_request(rx).unwrap_or_default();
 
@@ -486,6 +581,14 @@ mod tests {
         ) -> Result<usize, Error> {
             Err(Error::InvalidAddress)
         }
+        fn read_input_registers(
+            &mut self,
+            _addr: usize,
+            _len: usize,
+            _out: &mut [u16],
+        ) -> Result<usize, Error> {
+            Err(Error::NotSupported)
+        }
     }
 
     #[test]
@@ -509,5 +612,49 @@ mod tests {
         assert_eq!(response[0], 0x01); // Unit ID
         assert_eq!(response[1], 0x81); // Exception Function Code (0x01 | 0x80)
         assert_eq!(response[2], 0x02); // Exception Code (IllegalDataAddress)
+    }
+
+    /// Test malformed message (wrong CRC)
+    #[test]
+    fn decode_failed() {
+        let mut server = ModbusServer::new(1, ExceptionHandler);
+
+        let frame: [u8; 8] = [
+            0x01, // Slave address
+            0x01, // Function code: Read Coils
+            0x00, 0x00, // Starting address: 0
+            0x00, 0x01, // Quantity of coils: 1
+            0x00, 0x00, // WRONG CRC
+        ];
+
+        let mut tx_buf = [0u8; 32];
+        let len = server.process_frame(&frame, &mut tx_buf).unwrap();
+
+        assert_eq!(len, 0);
+    }
+
+    /// Test unsupported function
+    #[test]
+    fn unsupported_function() {
+        let mut server = ModbusServer::new(1, ExceptionHandler);
+
+        let frame: [u8; 8] = [
+            0x01, // Slave address
+            0x04, // Function code: Read Input Registers
+            0x00, 0x00, // Starting address: 0
+            0x00, 0x0C, // Quantity of coils: 12
+            0xF0, 0x0F, // CRC16 (low byte first)
+        ];
+
+        let mut tx_buf = [0u8; 32];
+        let len = server.process_frame(&frame, &mut tx_buf).unwrap();
+
+        let response = &tx_buf[..len];
+
+        // Expected: [0x01, 0x81, 0x02, CRC_LO, CRC_HI]
+        assert_eq!(len, 5);
+        assert_eq!(response[0], 0x01); // Unit ID
+        assert_eq!(response[1], 0x84); // Exception Function Code (0x01 | 0x80)
+        assert_eq!(response[2], 0x01); // Exception Code (IllegalFunctioN)
     }
 }
